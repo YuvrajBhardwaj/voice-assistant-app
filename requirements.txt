@@ -1,0 +1,13 @@
+langchain
+langchain-openai
+langchain_community
+python-dotenv
+opencv-python
+pyaudio
+soundfile
+SpeechRecognition
+Pillow
+numpy
+requests
+pygame
+# playsound
