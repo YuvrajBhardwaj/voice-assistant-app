@@ -1,4 +1,4 @@
-# Alloy Voice Assistant
+# Voice Assistant
 
 A cross-platform AI voice assistant that uses speech recognition, camera, and desktop screenshot features, powered by OpenAI and ElevenLabs APIs.
 
