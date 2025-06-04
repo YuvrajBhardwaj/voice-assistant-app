@@ -10,11 +10,16 @@ from cv2 import imencode
 from dotenv import load_dotenv
 import os
 from speech_recognition import Microphone, Recognizer, UnknownValueError
-import pygame  # pip install pygame
+import pygame
+from queue import Queue
 
+# Load environment variables
 load_dotenv()
 
-# --- Desktop Screenshot ---
+# Initialize pygame mixer once at startup
+pygame.mixer.init()
+
+# --- Desktop Screenshot Class ---
 class DesktopScreenshot:
     def __init__(self):
         self.screenshot = None
@@ -50,7 +55,7 @@ class DesktopScreenshot:
         if self.thread.is_alive():
             self.thread.join()
 
-# --- Camera Capture ---
+# --- Camera Capture Class ---
 class CameraCapture:
     def __init__(self, device=0):
         self.cap = cv2.VideoCapture(device)
@@ -92,15 +97,16 @@ class CameraCapture:
             self.thread.join()
         self.cap.release()
 
-# --- ElevenLabs TTS helper ---
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY", "sk_bf2189e04bce1f6a73b60d81ff0b8d740c79bbdb814dcfdf")
+# --- ElevenLabs TTS Function ---
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 ELEVENLABS_VOICE_ID = "nPczCjzI2devNBz1zQrb"
 
 def elevenlabs_tts(text):
     if not ELEVENLABS_API_KEY:
         print("ELEVENLABS_API_KEY not set.")
         return
-    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}"
+
+    url = f"https://api.elevenlabs.io/v1/text-to-speech/{ELEVENLABS_VOICE_ID}" 
     headers = {
         "xi-api-key": ELEVENLABS_API_KEY,
         "Content-Type": "application/json"
@@ -112,30 +118,33 @@ def elevenlabs_tts(text):
             "similarity_boost": 0.75
         }
     }
+
     response = requests.post(url, json=data, headers=headers)
     if response.status_code == 200:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
             f.write(response.content)
             f.flush()
             filename = f.name
-        pygame.mixer.init()
-        pygame.mixer.music.load(filename)
-        pygame.mixer.music.play()
-        while pygame.mixer.music.get_busy():
-            pygame.time.Clock().tick(10)
-        pygame.mixer.music.unload()  # Unload the music before deleting
-        os.remove(filename)
+
+        try:
+            pygame.mixer.music.load(filename)
+            pygame.mixer.music.play()
+            while pygame.mixer.music.get_busy():
+                pygame.time.Clock().tick(10)
+            pygame.mixer.music.unload()
+            os.remove(filename)
+        except Exception as e:
+            print("Error playing audio:", e)
     else:
         print("TTS request failed:", response.status_code, response.text)
 
-# --- Simple Assistant ---
-# class Assistant:
-# --- Advanced Assistant ---
+# --- Assistant Class ---
 class Assistant:
-    def __init__(self):
+    def __init__(self, tts_queue):
         self.api_key = os.getenv("OPENROUTER_API_KEY")
-        self.model = "mistralai/mixtral-8x7b"
-        self.api_url = "https://openrouter.ai/api/v1/chat/completions"
+        self.model = "meta-llama/llama-3-8b-instruct"
+        self.api_url = "https://openrouter.ai/api/v1/chat/completions" 
+        self.tts_queue = tts_queue
 
     def answer(self, prompt, image=None):
         if not prompt or not self.api_key:
@@ -161,81 +170,38 @@ class Assistant:
                 data = response.json()
                 reply = data["choices"][0]["message"]["content"]
                 print("Assistant:", reply)
-                elevenlabs_tts(reply)
+                self.tts_queue.put(reply)
             else:
                 print("OpenRouter API error:", response.status_code, response.text)
         except Exception as e:
             print("Exception during OpenRouter API call:", e)
 
-
-    def __init__(self):
-        self.api_key = os.getenv("OPENROUTER_API_KEY")
-        self.model = "mistralai/mixtral-8x7b"
-        self.api_url = "https://openrouter.ai/api/v1/chat/completions"
-
-    def answer(self, prompt, image=None):
-        if not prompt or not self.api_key:
-            print("Missing prompt or API key.")
-            return
-
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
-        }
-
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt}
-            ]
-        }
-
-        try:
-            response = requests.post(self.api_url, headers=headers, json=payload)
-            if response.status_code == 200:
-                data = response.json()
-                reply = data["choices"][0]["message"]["content"]
-                print("Assistant:", reply)
-                elevenlabs_tts(reply)
-            else:
-                print("OpenRouter API error:", response.status_code, response.text)
-        except Exception as e:
-            print("Exception during OpenRouter API call:", e)
-
-    def answer(self, prompt, image=None):
-        if not prompt:
-            return
-        print("User said:", prompt)
-
-        # Dummy response logic
-        response = f"You said: {prompt[:50]}..."
-
-        print("Assistant:", response)
-        elevenlabs_tts(response)
-
-# --- Initialize ---
+# --- Initialize Components ---
+tts_queue = Queue()
 desktop_screenshot = DesktopScreenshot().start()
 camera_capture = CameraCapture(device=0).start()
+assistant = Assistant(tts_queue)
 
-assistant = Assistant()
-
-def audio_callback(recognizer, audio):
-    try:
-        prompt = recognizer.recognize_google(audio)  # Use Google recognizer for now
-        assistant.answer(prompt)
-    except UnknownValueError:
-        print("Could not understand audio.")
-
+# --- Voice Recognition Setup ---
 recognizer = Recognizer()
 microphone = Microphone()
 
 with microphone as source:
     recognizer.adjust_for_ambient_noise(source)
 
+def audio_callback(recognizer, audio):
+    try:
+        prompt = recognizer.recognize_google(audio)
+        print("Recognized:", prompt)
+        assistant.answer(prompt)
+    except UnknownValueError:
+        print("Could not understand audio.")
+
 stop_listening = recognizer.listen_in_background(microphone, audio_callback)
 
+# --- Main Loop ---
 try:
+    print("Listening... Say something!")
     while True:
         desktop_img = desktop_screenshot.read()
         camera_img = camera_capture.read()
@@ -244,6 +210,11 @@ try:
             cv2.imshow("Desktop", desktop_img)
         if camera_img is not None:
             cv2.imshow("Camera", camera_img)
+
+        # Process TTS queue
+        while not tts_queue.empty():
+            text_to_speak = tts_queue.get()
+            elevenlabs_tts(text_to_speak)
 
         if cv2.waitKey(1) in [27, ord("q")]:
             break
